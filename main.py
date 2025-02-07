@@ -1,5 +1,6 @@
 from flask import Flask, request, redirect, render_template_string
 import uuid
+import os
 
 app = Flask(__name__)
 
@@ -53,8 +54,8 @@ def index():
             # Generate a unique code (first 6 characters of a UUID)
             unique_code = uuid.uuid4().hex[:6]
             url_mapping[unique_code] = original_url
-            # Build the unique URL (Flask's request.url_root ends with a slash)
-            unique_url = request.url_root + unique_code
+            # Build the unique URL using request.url_root which reflects the deployed domain on Koyeb
+            unique_url = request.url_root.rstrip("/") + "/" + unique_code
     return render_template_string(TEMPLATE, unique_url=unique_url)
 
 @app.route("/<unique_code>")
@@ -65,5 +66,7 @@ def redirect_to_url(unique_code):
     return "Invalid or expired URL.", 404
 
 if __name__ == "__main__":
-    app.run(debug=True)
-    
+    # Use the PORT environment variable provided by Koyeb (default to 5000 if not set)
+    port = int(os.environ.get("PORT", 8080))
+    # Bind to 0.0.0.0 to be accessible externally
+    app.run(debug=True, host="0.0.0.0", port=port)
