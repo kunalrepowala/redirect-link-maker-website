@@ -94,6 +94,6 @@ def show_redirect(unique_code):
 
 if __name__ == "__main__":
     # Use the PORT environment variable provided by Koyeb (default to 5000 if not set)
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 8080))
     # Bind to 0.0.0.0 so the app is accessible externally
     app.run(debug=True, host="0.0.0.0", port=port)
