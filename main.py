@@ -1,4 +1,4 @@
-from flask import Flask, request, redirect, render_template_string
+from flask import Flask, request, render_template_string
 import uuid
 import os
 
@@ -7,8 +7,8 @@ app = Flask(__name__)
 # In-memory dictionary to store unique code -> URL mapping.
 url_mapping = {}
 
-# HTML template (using render_template_string for a single file script)
-TEMPLATE = """
+# Template for the main page where the user generates the unique link.
+MAIN_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -21,7 +21,7 @@ TEMPLATE = """
         .result { margin-top: 20px; }
     </style>
     <script>
-        // Copies the content of the input field to clipboard
+        // Copies the content of the input field to the clipboard
         function copyLink() {
             var copyText = document.getElementById("uniqueLink");
             navigator.clipboard.writeText(copyText.value);
@@ -45,6 +45,32 @@ TEMPLATE = """
 </html>
 """
 
+# Template for the redirect page that shows a button
+REDIRECT_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Redirect Page</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 50px; }
+      button { padding: 8px 12px; }
+    </style>
+    <script>
+       function redirectUser() {
+         // Redirect the user to the target URL
+         window.location.href = "{{ target_url }}";
+       }
+    </script>
+</head>
+<body>
+  <h1>Ready to Redirect?</h1>
+  <p>Click the button below to continue to your destination.</p>
+  <button onclick="redirectUser()">Redirect</button>
+</body>
+</html>
+"""
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     unique_url = None
@@ -56,17 +82,18 @@ def index():
             url_mapping[unique_code] = original_url
             # Build the unique URL using request.url_root which reflects the deployed domain on Koyeb
             unique_url = request.url_root.rstrip("/") + "/" + unique_code
-    return render_template_string(TEMPLATE, unique_url=unique_url)
+    return render_template_string(MAIN_TEMPLATE, unique_url=unique_url)
 
 @app.route("/<unique_code>")
-def redirect_to_url(unique_code):
-    # Redirect to the original URL if the unique code exists.
+def show_redirect(unique_code):
+    # Instead of automatically redirecting, show a page with a "Redirect" button.
     if unique_code in url_mapping:
-        return redirect(url_mapping[unique_code])
+        target_url = url_mapping[unique_code]
+        return render_template_string(REDIRECT_TEMPLATE, target_url=target_url)
     return "Invalid or expired URL.", 404
 
 if __name__ == "__main__":
     # Use the PORT environment variable provided by Koyeb (default to 5000 if not set)
-    port = int(os.environ.get("PORT", 8080))
-    # Bind to 0.0.0.0 to be accessible externally
+    port = int(os.environ.get("PORT", 5000))
+    # Bind to 0.0.0.0 so the app is accessible externally
     app.run(debug=True, host="0.0.0.0", port=port)
