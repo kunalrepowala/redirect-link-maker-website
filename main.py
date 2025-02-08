@@ -897,4 +897,4 @@ bot_thread.start()
 # Run Flask App on port 8080
 # -----------------------
 if __name__ == '__main__':
-    app.run(debug=True, use_reloader=False, port=8080)
+    app.run(host="0.0.0.0", debug=True, use_reloader=False, port=8080)
