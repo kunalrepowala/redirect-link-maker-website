@@ -25,7 +25,7 @@ import os
 
 # --- SQLite for Verified Sessions ---
 DB_FILE = "verified_sessions.db"
-MAX_SESSIONS = 3
+MAX_SESSIONS = 3  # Adjust as needed.
 
 def init_session_db():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
@@ -38,6 +38,7 @@ def init_session_db():
         )
     ''')
     conn.commit()
+    # Clear all sessions on startup.
     cur.execute('DELETE FROM sessions')
     conn.commit()
     return conn
@@ -105,7 +106,7 @@ sub_thread.start()
 
 # --- Bot Constants and Global Setting ---
 BOT_TOKEN = "8031663240:AAFBLk9xBIrceFT4zTtKHSWeJ8iYq5cOdyA"
-daily_limit_enabled = True
+daily_limit_enabled = True  # When False, no daily limit is applied.
 
 def generate_code(length=10):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
@@ -177,7 +178,7 @@ def home():
 </html>
 ''')
 
-# --- TeraLink Generator Page (Modified) ---
+# --- TeraLink Generator Page (Modified with Title & Description Fields) ---
 @app.route('/TeraLink')
 def teralink_page():
     return render_template_string('''
@@ -271,7 +272,7 @@ def teralink_page():
 </html>
 ''')
 
-# --- /generate Endpoint (Modified) ---
+# --- /generate Endpoint (Modified to Save Title & Description) ---
 @app.route('/generate', methods=['POST'])
 def generate_teralink():
     data = request.get_json()
@@ -281,7 +282,7 @@ def generate_teralink():
     if "/sharing/embed" not in link:
         return jsonify(success=False, error="Invalid link. Only /sharing/embed links are accepted."), 400
     code = generate_code(10)
-    # Use provided title if available; otherwise, extract it
+    # Use provided title if available; otherwise, extract it.
     if user_title:
         final_title = user_title
     else:
@@ -490,7 +491,7 @@ def check_verification():
         "original_url": data["original_url"]
     })
 
-# --- Embed Page Endpoint (Modified) ---
+# --- Embed Page Endpoint (Modified to include Caption & Toggleable Description) ---
 @app.route('/p/<code>')
 def embed_page(code):
     tg_user = request.cookies.get("tg_user")
@@ -509,7 +510,6 @@ def embed_page(code):
     original_link = record["link"]
     video_title = record.get("title", "")
     description = record.get("description", "")
-    global daily_limit_enabled
     sub = subscriptions.get(str(uid))
     expiry_dt = None
     if sub and sub.get("expiry"):
@@ -517,8 +517,12 @@ def embed_page(code):
             expiry_dt = datetime.fromisoformat(sub.get("expiry")) if isinstance(sub.get("expiry"), str) else sub.get("expiry")
         except:
             expiry_dt = None
-    if sub and expiry_dt and datetime.now(timezone.utc) > expiry_dt:
-        sub = None
+    # Ensure expiry_dt is timezone-aware if it exists.
+    if sub and expiry_dt:
+        if expiry_dt.tzinfo is None:
+            expiry_dt = expiry_dt.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) > expiry_dt:
+            sub = None
     if not daily_limit_enabled:
         allowed = float("inf")
     else:
@@ -594,7 +598,7 @@ def embed_page(code):
     template = MOBILE_EMBED_TEMPLATE if any(k in ua for k in ['iphone','android','ipad','mobile']) else DESKTOP_EMBED_TEMPLATE
     return render_template_string(template, embed_url=embed_url, video_title=video_title, description=description)
 
-# --- Embed Templates (Modified to include caption & toggleable description) ---
+# --- Embed Templates (Caption & Toggleable Description) ---
 DESKTOP_EMBED_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -668,10 +672,9 @@ DESKTOP_EMBED_TEMPLATE = '''
 </html>
 '''
 
-# For mobile, we use the same template
 MOBILE_EMBED_TEMPLATE = DESKTOP_EMBED_TEMPLATE
 
-# --- /info Endpoint (Unchanged) ---
+# --- /info Endpoint (Modified with Timezone Check) ---
 @app.route("/info")
 def info():
     tg_user = request.cookies.get("tg_user")
@@ -691,8 +694,12 @@ def info():
             expiry_dt = datetime.fromisoformat(sub.get("expiry")) if isinstance(sub.get("expiry"), str) else sub.get("expiry")
         except:
             expiry_dt = None
-    if sub and expiry_dt and datetime.now(timezone.utc) > expiry_dt:
-        sub = None
+    # Ensure expiry_dt is timezone-aware.
+    if sub and expiry_dt:
+        if expiry_dt.tzinfo is None:
+            expiry_dt = expiry_dt.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) > expiry_dt:
+            sub = None
     if not sub:
         plan_info = "<p>You are on the Basic Free Plan (1 link per day).</p>"
     else:
