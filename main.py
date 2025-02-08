@@ -68,7 +68,7 @@ user_last_access = {}  # telegram_user_id -> (code, date_str)
 # -----------------------
 # Bot Constants and Global Setting
 # -----------------------
-BOT_TOKEN = "7660007316:AAHis4NuPllVzH-7zsYhXGfgokiBxm_Tml0"
+BOT_TOKEN = "8031663240:AAFBLk9xBIrceFT4zTtKHSWeJ8iYq5cOdyA"
 daily_limit_enabled = True  # True = enforce per‑day limit; False = disable limit
 
 # -----------------------
