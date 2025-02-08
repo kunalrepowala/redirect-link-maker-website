@@ -1,3 +1,7 @@
+# Monkey-patch standard libraries with gevent so that blocking I/O becomes cooperative.
+from gevent import monkey
+monkey.patch_all()
+
 from flask import (
     Flask,
     render_template_string,
@@ -49,23 +53,20 @@ col_users = db_users["users"]
 # -----------------------
 # In‑Memory Data for Verification and Subscriptions
 # -----------------------
-pending_verifications = {}   # token -> { session_id, original_url, verified, telegram_user_id }
-verified_users = {}          # telegram_user_id -> session_id
-user_last_access = {}        # telegram_user_id -> (code, date_str)
+# pending_verifications: token -> { session_id, original_url, verified, telegram_user_id }
+pending_verifications = {}
+# verified_users: user_id (int) -> list of active session ids (up to 3)
+verified_users = {}
+# user_last_access: user_id (int) -> (code, date_str)
+user_last_access = {}
 
 # Global subscriptions dictionary (updated every 2 seconds)
-# Expected subscription document format (from col_users):
+# Expected subscription document structure (from col_users):
 # {
 #   "_id": "users",
 #   "all_users": [...],
 #   "subscriptions": {
-#       "6773787379": {
-#            "purchased": "2025-02-08T13:15:55.467774",
-#            "expiry": "2025-03-10T13:15:55.467774",
-#            "expired_notified": false,
-#            "plan": "full" or "limited",
-#            "upgraded": false
-#       },
+#       "6773787379": { "purchased": "...", "expiry": "...", "expired_notified": false, "plan": "full"/"limited", "upgraded": bool },
 #       ...
 #   }
 # }
@@ -88,7 +89,8 @@ sub_thread.start()
 # Bot Constants and Global Setting
 # -----------------------
 BOT_TOKEN = "8031663240:AAFBLk9xBIrceFT4zTtKHSWeJ8iYq5cOdyA"
-daily_limit_enabled = True  # True = enforce per‑day limit; False = disable limit
+# When daily_limit_enabled is False, there is no per‑day limit.
+daily_limit_enabled = True
 
 # -----------------------
 # Utility Functions
@@ -126,7 +128,7 @@ def extract_title(url):
 app = Flask(__name__)
 
 # -----------------------
-# Main Page ("/") – Landing page with "Contact Admin" button
+# Main Page ("/")
 # -----------------------
 @app.route("/")
 def home():
@@ -139,47 +141,20 @@ def home():
   <title>Welcome to HotError</title>
   <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
   <style>
-    body {
-      background: linear-gradient(135deg, #e0f7e9, #f8f9fa);
-      font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
-    }
+    body { background: linear-gradient(135deg, #e0f7e9, #f8f9fa); font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
     .container { margin-top: 100px; text-align: center; }
-    h1 {
-      font-size: 48px;
-      color: #2c3e50;
-      text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
-    }
-    .animated-caption {
-      margin-top: 20px;
-      font-size: 24px;
-      color: #2c3e50;
-      animation: fadeIn 2s ease-in-out infinite alternate;
-    }
+    h1 { font-size: 48px; color: #2c3e50; text-shadow: 1px 1px 2px rgba(0,0,0,0.1); }
+    .animated-caption { margin-top: 20px; font-size: 24px; color: #2c3e50; animation: fadeIn 2s ease-in-out infinite alternate; }
     @keyframes fadeIn { from { opacity: 0.6; } to { opacity: 1; } }
     .btn-telegram, .btn-instagram, .btn-admin {
-      border: none;
-      padding: 15px 30px;
-      font-size: 20px;
-      border-radius: 50px;
-      text-decoration: none;
-      display: inline-block;
-      transition: transform 0.2s ease;
-      margin: 10px;
+       border: none; padding: 15px 30px; font-size: 20px; border-radius: 50px; text-decoration: none;
+       display: inline-block; transition: transform 0.2s ease; margin: 10px;
     }
-    .btn-telegram {
-      background: linear-gradient(45deg, #007bff, #0056b3);
-      color: #fff;
-    }
+    .btn-telegram { background: linear-gradient(45deg, #007bff, #0056b3); color: #fff; }
     .btn-telegram:hover { transform: scale(1.05); text-decoration: none; }
-    .btn-instagram {
-      background: linear-gradient(45deg, #833ab4, #fd1d1d, #fcb045);
-      color: #fff;
-    }
+    .btn-instagram { background: linear-gradient(45deg, #833ab4, #fd1d1d, #fcb045); color: #fff; }
     .btn-instagram:hover { transform: scale(1.05); text-decoration: none; }
-    .btn-admin {
-      background: linear-gradient(45deg, #6c757d, #343a40);
-      color: #fff;
-    }
+    .btn-admin { background: linear-gradient(45deg, #6c757d, #343a40); color: #fff; }
     .btn-admin:hover { transform: scale(1.05); text-decoration: none; }
   </style>
 </head>
@@ -284,7 +259,7 @@ def teralink_page():
 ''')
 
 # -----------------------
-# /generate Endpoint – Process TeraLink creation (extract title once and store in Mongo)
+# /generate Endpoint – Process TeraLink creation (store in Mongo)
 # -----------------------
 @app.route('/generate', methods=['POST'])
 def generate_teralink():
@@ -299,7 +274,7 @@ def generate_teralink():
     return jsonify(success=True, generated="/p/" + code)
 
 # -----------------------
-# /Redirection Page – Create a redirection link
+# /Redirection Page – Create redirection link
 # -----------------------
 @app.route('/Redirection')
 def redirection_page():
@@ -401,14 +376,14 @@ def create_redirection():
     return jsonify(success=True, generated="/s/" + code)
 
 # -----------------------
-# /s/<code> Endpoint – Redirect to stored redirection (NO verification required)
+# /s/<code> Endpoint – Redirect using stored redirection (NO verification)
 # -----------------------
 @app.route('/s/<code>')
 def redirection_redirect(code):
     record = col_redirections.find_one({"code": code})
     if not record:
         abort(404, description="Redirection link not found.")
-    # Record usage as guest if user is not verified.
+    # No verification check: record usage as guest if no user cookie.
     tg_user = request.cookies.get("tg_user")
     try:
         tg_user_val = int(tg_user) if tg_user is not None else "guest"
@@ -424,14 +399,14 @@ def redirection_redirect(code):
     return redirect(record["link"])
 
 # -----------------------
-# /verify and /check_verification Endpoints – For protected pages (TeraLink and info)
+# /verify and /check_verification Endpoints – For protected pages (for /p and /info)
 # -----------------------
 @app.route('/verify')
 def verify():
     next_url = request.args.get('next') or url_for('teralink_page')
     tg_user = request.cookies.get("tg_user")
     session_id = request.cookies.get("session_id")
-    if tg_user and session_id and verified_users.get(int(tg_user)) == session_id:
+    if tg_user and session_id and verified_users.get(int(tg_user), []) and session_id in verified_users.get(int(tg_user), []):
         return redirect(next_url)
     token = generate_code(15)
     session_id = generate_code(15)
@@ -453,34 +428,23 @@ def verify():
       background: linear-gradient(135deg, #2C3E50, #34495E);
       font-family: "Georgia", serif;
       color: #ECF0F1;
-      margin: 0;
-      padding: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      margin: 0; padding: 0;
+      display: flex; align-items: center; justify-content: center;
       height: 100vh;
     }
     .verify-container {
       background: #34495E;
-      padding: 30px;
-      border-radius: 10px;
+      padding: 30px; border-radius: 10px;
       box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-      text-align: center;
-      width: 90%;
-      max-width: 500px;
+      text-align: center; width: 90%; max-width: 500px;
     }
     .verify-container h3 { font-size: 28px; margin-bottom: 20px; }
     .verify-container p { font-size: 16px; margin-bottom: 20px; }
     .verify-btn {
       background: linear-gradient(45deg, #007bff, #0056b3);
-      color: #ECF0F1;
-      border: none;
-      padding: 12px 24px;
-      font-size: 18px;
-      border-radius: 4px;
-      text-decoration: none;
-      cursor: pointer;
-      transition: background 0.3s;
+      color: #ECF0F1; border: none;
+      padding: 12px 24px; font-size: 18px; border-radius: 4px;
+      text-decoration: none; cursor: pointer; transition: background 0.3s;
     }
     .verify-btn:hover { background: #1ABC9C; }
   </style>
@@ -535,7 +499,7 @@ def embed_page(code):
         tg_user_val = int(tg_user_cookie)
     except ValueError:
         return redirect(url_for('verify', next=request.url))
-    if verified_users.get(tg_user_val) != session_cookie:
+    if not (session_cookie in verified_users.get(tg_user_val, [])):
         return redirect(url_for('verify', next=request.url))
     record = col_links.find_one({"code": code})
     if not record:
@@ -544,7 +508,6 @@ def embed_page(code):
     video_title = record["title"]
     today_str = str(date.today())
     global daily_limit_enabled
-    # Process subscription info
     sub = subscriptions.get(str(tg_user_val))
     expiry_dt = None
     if sub and sub.get("expiry"):
@@ -554,13 +517,16 @@ def embed_page(code):
             expiry_dt = None
     if sub and expiry_dt and datetime.utcnow() > expiry_dt:
         sub = None
-    if sub:
-        if sub.get("plan", "limited") == "full" or sub.get("upgraded", False):
-            allowed = float("inf")
-        else:
-            allowed = 3
+    if not daily_limit_enabled:
+        allowed = float("inf")
     else:
-        allowed = 1
+        if sub:
+            if sub.get("plan", "limited") == "full" or sub.get("upgraded", False):
+                allowed = float("inf")
+            else:
+                allowed = 3
+        else:
+            allowed = 1
     start_of_day = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     end_of_day = start_of_day.replace(hour=23, minute=59, second=59, microsecond=999999)
     usage_count = col_usage.count_documents({
@@ -581,12 +547,8 @@ def embed_page(code):
       background: linear-gradient(135deg, #2C3E50, #34495E);
       font-family: "Georgia", serif;
       color: #ECF0F1;
-      margin: 0;
-      padding: 0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
+      margin: 0; padding: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
       height: 100vh;
     }
     .upgrade-container {
@@ -594,9 +556,7 @@ def embed_page(code):
       padding: 30px;
       border-radius: 10px;
       box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-      text-align: center;
-      width: 90%;
-      max-width: 500px;
+      text-align: center; width: 90%; max-width: 500px;
     }
     .upgrade-container h3 { font-size: 28px; margin-bottom: 20px; }
     .upgrade-container p { font-size: 16px; margin-bottom: 20px; }
@@ -663,7 +623,7 @@ def embed_page(code):
     return render_template_string(template, embed_url=embed_url, video_title=video_title)
 
 # -----------------------
-# Embed Templates without Loading Overlay – with dynamic title
+# Embed Templates
 # -----------------------
 DESKTOP_EMBED_TEMPLATE = '''
 <!DOCTYPE html>
@@ -701,22 +661,20 @@ MOBILE_EMBED_TEMPLATE = '''
 '''
 
 # -----------------------
-# /info Endpoint – Show only user info and subscription details (for verified users)
+# /info Endpoint – Show user info and subscription details
 # -----------------------
 @app.route("/info")
 def info():
     tg_user = request.cookies.get("tg_user")
-    session_id = request.cookies.get("session_id")
-    if not tg_user or not session_id:
+    session_cookie = request.cookies.get("session_id")
+    if not tg_user or not session_cookie:
         return redirect(url_for('verify', next=request.url))
     try:
         tg_user_val = int(tg_user)
     except ValueError:
         return redirect(url_for('verify', next=request.url))
-    if verified_users.get(tg_user_val) != session_id:
+    if not (session_cookie in verified_users.get(tg_user_val, [])):
         return redirect(url_for('verify', next=request.url))
-    # Look up subscription details from the global subscriptions dictionary.
-    # The subscription document is stored under the "subscriptions" key of the document with _id "users"
     sub = subscriptions.get(str(tg_user_val))
     expiry_dt = None
     if sub and sub.get("expiry"):
@@ -742,7 +700,7 @@ def info():
                 time_left_str = "Expired"
             else:
                 days = delta.days
-                hours = delta.seconds // 3600
+                hours = (delta.seconds // 3600)
                 time_left_str = f"{days} days, {hours} hours left"
         else:
             time_left_str = "N/A"
@@ -780,11 +738,8 @@ def info():
       background: linear-gradient(135deg, #e0f7e9, #f8f9fa);
       font-family: "Georgia", serif;
       color: #2c3e50;
-      margin: 0;
-      padding: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      margin: 0; padding: 0;
+      display: flex; align-items: center; justify-content: center;
       height: 100vh;
     }
     .info-container {
@@ -811,7 +766,7 @@ def info():
     ''', tg_user=tg_user, plan_info=plan_info)
 
 # -----------------------
-# Telegram Bot Admin Command Handlers and /setting and /mongo Commands
+# Telegram Bot Admin Command Handlers and /setting, /mongo, and /plan Commands
 # -----------------------
 def split_message(text, max_length=4000):
     lines = text.splitlines(keepends=True)
@@ -868,7 +823,14 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     pending_verifications[token]["verified"] = True
     pending_verifications[token]["telegram_user_id"] = update.effective_user.id
-    verified_users[update.effective_user.id] = pending_verifications[token]["session_id"]
+    uid = update.effective_user.id
+    session = pending_verifications[token]["session_id"]
+    if uid not in verified_users:
+        verified_users[uid] = []
+    if session not in verified_users[uid]:
+        verified_users[uid].append(session)
+    if len(verified_users[uid]) > 3:
+        verified_users[uid] = verified_users[uid][-3:]
     await update.message.reply_text(f"Verification complete. You can now access your link: {pending_verifications[token]['original_url']}")
 
 async def setting_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -906,6 +868,16 @@ async def mongo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for chunk in split_message(subs_text):
         await update.message.reply_text(chunk)
 
+async def plan_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    sub = subscriptions.get(str(uid))
+    if not sub:
+        text = "You are on the Basic Free Plan (1 link per day)."
+    else:
+        import json
+        text = json.dumps(sub, default=str, indent=2)
+    await update.message.reply_text(text)
+
 async def run_telegram_bot():
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start_handler))
@@ -913,6 +885,7 @@ async def run_telegram_bot():
     application.add_handler(CommandHandler("Redirection", admin_redirection_handler))
     application.add_handler(CommandHandler("setting", setting_handler))
     application.add_handler(CommandHandler("mongo", mongo_handler))
+    application.add_handler(CommandHandler("plan", plan_handler))
     application.add_handler(CallbackQueryHandler(toggle_limit_callback, pattern="^toggle_limit$"))
     await application.run_polling()
 
@@ -929,4 +902,5 @@ bot_thread.start()
 # Run Flask App on port 8080
 # -----------------------
 if __name__ == '__main__':
+    # Run Flask in threaded mode so that requests are processed concurrently.
     app.run(host="0.0.0.0", debug=True, use_reloader=False, port=8080)
