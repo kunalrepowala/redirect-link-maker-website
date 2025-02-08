@@ -1,28 +1,16 @@
-# --- Gevent monkey-patching for cooperative I/O ---
 from gevent import monkey
 monkey.patch_all()
 
-# --- Standard Imports ---
-from flask import (
-    Flask,
-    render_template_string,
-    request,
-    abort,
-    jsonify,
-    redirect,
-    url_for
-)
+from flask import Flask, render_template_string, request, abort, jsonify, redirect, url_for
 import random, string, asyncio, threading, time
 from datetime import date, datetime, timezone
 import nest_asyncio
 nest_asyncio.apply()
 
-# --- Additional Imports for Title Extraction and MongoDB ---
 import requests
 from bs4 import BeautifulSoup
 from pymongo import MongoClient
 
-# --- Telegram Bot Imports ---
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -32,12 +20,12 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# --- SQLite for Persistent Verified Sessions ---
 import sqlite3
 import os
 
+# --- SQLite for Verified Sessions ---
 DB_FILE = "verified_sessions.db"
-MAX_SESSIONS = 3  # Change this value to adjust max sessions per user
+MAX_SESSIONS = 3
 
 def init_session_db():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
@@ -50,7 +38,6 @@ def init_session_db():
         )
     ''')
     conn.commit()
-    # Clear all sessions on startup (expire all previous sessions)
     cur.execute('DELETE FROM sessions')
     conn.commit()
     return conn
@@ -91,18 +78,16 @@ def is_session_valid(user_id, session_id):
 # --- MongoDB Connections ---
 usage_client = MongoClient("mongodb+srv://kunalrepowala7:ntDj85lF5JPJvz0a@cluster0.fgq1r.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
 db_usage = usage_client["Cluster0"]
-col_links = db_usage["links"]             # For TeraLink records
-col_redirections = db_usage["redirections"]   # For redirection records
-col_usage = db_usage["usage"]               # For website usage records
+col_links = db_usage["links"]
+col_redirections = db_usage["redirections"]
+col_usage = db_usage["usage"]
 
 users_client = MongoClient("mongodb+srv://kunalrepowala2:LCLIBQxW8IOdZpeF@cluster0.awvns.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
 db_users = users_client["Cluster0"]
 col_users = db_users["users"]
 
-# --- In-Memory Data for Pending Verification ---
+# --- In-Memory Data for Pending Verification & Subscriptions ---
 pending_verifications = {}  # token -> { session_id, original_url, verified, telegram_user_id }
-
-# --- Global Subscriptions Dictionary ---
 subscriptions = {}
 
 def update_subscriptions():
@@ -120,10 +105,8 @@ sub_thread.start()
 
 # --- Bot Constants and Global Setting ---
 BOT_TOKEN = "8031663240:AAFBLk9xBIrceFT4zTtKHSWeJ8iYq5cOdyA"
-# When daily_limit_enabled is False, there is no per-day limit.
 daily_limit_enabled = True
 
-# --- Utility Functions ---
 def generate_code(length=10):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
@@ -154,9 +137,6 @@ def extract_title(url):
 # --- Flask Application Setup ---
 app = Flask(__name__)
 
-# --- Routes ---
-
-# Main page
 @app.route("/")
 def home():
     return render_template_string('''
@@ -173,7 +153,10 @@ def home():
     h1 { font-size: 48px; color: #2c3e50; text-shadow: 1px 1px 2px rgba(0,0,0,0.1); }
     .animated-caption { margin-top: 20px; font-size: 24px; color: #2c3e50; animation: fadeIn 2s ease-in-out infinite alternate; }
     @keyframes fadeIn { from { opacity: 0.6; } to { opacity: 1; } }
-    .btn-telegram, .btn-instagram, .btn-admin { border: none; padding: 15px 30px; font-size: 20px; border-radius: 50px; text-decoration: none; display: inline-block; transition: transform 0.2s ease; margin: 10px; }
+    .btn-telegram, .btn-instagram, .btn-admin {
+       border: none; padding: 15px 30px; font-size: 20px; border-radius: 50px; text-decoration: none;
+       display: inline-block; transition: transform 0.2s ease; margin: 10px;
+    }
     .btn-telegram { background: linear-gradient(45deg, #007bff, #0056b3); color: #fff; }
     .btn-telegram:hover { transform: scale(1.05); }
     .btn-instagram { background: linear-gradient(45deg, #833ab4, #fd1d1d, #fcb045); color: #fff; }
@@ -194,7 +177,7 @@ def home():
 </html>
 ''')
 
-# TeraLink page – now includes additional fields for Title and Description
+# --- TeraLink Generator Page (Modified) ---
 @app.route('/TeraLink')
 def teralink_page():
     return render_template_string('''
@@ -208,39 +191,35 @@ def teralink_page():
   <style>
     body { background-color: #f8f9fa; }
     .container { max-width: 600px; margin: 50px auto; padding: 15px; }
-    .card { box-shadow: 0 4px 8px rgba(0,0,0,0.1); padding: 20px; }
+    .card { box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
     .btn-classic { background-color: #007bff; border: none; color: #fff; font-size: 18px; padding: 12px 25px; border-radius: 4px; }
     .btn-classic:hover { background-color: #0056b3; }
-    .form-label { font-weight: bold; }
     #generatedLink { display: none; margin-top: 15px; }
     #errorMsg { margin-top: 10px; color: #dc3545; }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="card">
+    <div class="card p-4">
       <h2 class="text-center">TeraLink Generator</h2>
-      <p class="text-center">Enter the required URL along with optional Title and Description.</p>
+      <p class="text-center">Paste your Terabox <code>/sharing/embed</code> link below:</p>
       <div class="form-group">
-        <label class="form-label">URL (required):</label>
-        <input type="text" id="linkInput" class="form-control" placeholder="https://terabox.com/sharing/embed?...">
+        <input type="text" id="linkInput" class="form-control form-control-lg" placeholder="https://terabox.com/sharing/embed?...">
       </div>
       <div class="form-group">
-        <label class="form-label">Title (optional):</label>
-        <input type="text" id="titleInput" class="form-control" placeholder="Enter a title (or leave blank to auto-extract)">
+        <input type="text" id="titleInput" class="form-control form-control-lg" placeholder="Optional: Custom Title">
       </div>
       <div class="form-group">
-        <label class="form-label">Description (optional):</label>
-        <textarea id="descriptionInput" class="form-control" rows="3" placeholder="Enter a description"></textarea>
+        <textarea id="descriptionInput" class="form-control form-control-lg" rows="3" placeholder="Optional: Description"></textarea>
       </div>
       <div class="text-center">
-        <button id="generateBtn" class="btn btn-classic">Generate Link</button>
+        <button id="generateBtn" class="btn btn-classic btn-lg">Generate Link</button>
       </div>
       <div id="generatedLink" class="mt-3">
         <div class="input-group">
-          <input type="text" id="genLinkText" class="form-control" readonly>
+          <input type="text" id="genLinkText" class="form-control form-control-lg" readonly>
           <div class="input-group-append">
-            <button id="copyBtn" class="btn btn-outline-secondary" type="button">Copy</button>
+            <button id="copyBtn" class="btn btn-outline-secondary btn-lg" type="button">Copy</button>
           </div>
         </div>
       </div>
@@ -256,14 +235,14 @@ def teralink_page():
             var description = $('#descriptionInput').val().trim();
             $('#errorMsg').text('');
             if(link.indexOf("/sharing/embed") === -1){
-                $('#errorMsg').text("Invalid URL. Please provide a valid /sharing/embed link.");
+                $('#errorMsg').text("Invalid link. Please provide a valid /sharing/embed link.");
                 return;
             }
             $.ajax({
                 url: '/generate',
                 method: 'POST',
                 contentType: 'application/json',
-                data: JSON.stringify({ link: link, title: title, description: description }),
+                data: JSON.stringify({link: link, title: title, description: description}),
                 success: function(resp){
                     if(resp.success){
                         var genLink = window.location.origin + resp.generated;
@@ -292,30 +271,32 @@ def teralink_page():
 </html>
 ''')
 
-# /generate endpoint – now accepts title and description
+# --- /generate Endpoint (Modified) ---
 @app.route('/generate', methods=['POST'])
 def generate_teralink():
     data = request.get_json()
     link = data.get('link', '')
-    # If a title is provided by the user, use it; otherwise, extract the title.
     user_title = data.get('title', '').strip()
-    if not user_title:
-        user_title = extract_title(link)
-    user_description = data.get('description', '').strip()  # optional description
+    description = data.get('description', '').strip()
     if "/sharing/embed" not in link:
         return jsonify(success=False, error="Invalid link. Only /sharing/embed links are accepted."), 400
     code = generate_code(10)
+    # Use provided title if available; otherwise, extract it
+    if user_title:
+        final_title = user_title
+    else:
+        final_title = extract_title(link)
     doc = {
         "code": code,
         "link": link,
-        "title": user_title,
-        "description": user_description,  # store description if provided
+        "title": final_title,
+        "description": description,
         "created_at": datetime.now(timezone.utc)
     }
     col_links.insert_one(doc)
     return jsonify(success=True, generated="/p/" + code)
 
-# /Redirection page remains unchanged
+# --- Redirection Endpoints (Unchanged) ---
 @app.route('/Redirection')
 def redirection_page():
     return render_template_string('''
@@ -342,16 +323,16 @@ def redirection_page():
       <h2 class="text-center">Redirection Generator</h2>
       <p class="text-center">Enter any full URL or text link:</p>
       <div class="form-group">
-        <input type="text" id="redirectionInput" class="form-control" placeholder="https://example.com/somepage">
+        <input type="text" id="redirectionInput" class="form-control form-control-lg" placeholder="https://example.com/somepage">
       </div>
       <div class="text-center">
-        <button id="generateRedirectionBtn" class="btn btn-classic">Create Redirection</button>
+        <button id="generateRedirectionBtn" class="btn btn-classic btn-lg">Create Redirection</button>
       </div>
       <div id="generatedRedirection" class="mt-3">
         <div class="input-group">
-          <input type="text" id="redirectionLinkText" class="form-control" readonly>
+          <input type="text" id="redirectionLinkText" class="form-control form-control-lg" readonly>
           <div class="input-group-append">
-            <button id="copyRedirectionBtn" class="btn btn-outline-secondary" type="button">Copy</button>
+            <button id="copyRedirectionBtn" class="btn btn-outline-secondary btn-lg" type="button">Copy</button>
           </div>
         </div>
       </div>
@@ -372,7 +353,7 @@ def redirection_page():
                 url: '/create_redirection',
                 method: 'POST',
                 contentType: 'application/json',
-                data: JSON.stringify({ link: link }),
+                data: JSON.stringify({link: link}),
                 success: function(resp){
                     if(resp.success){
                         var genLink = window.location.origin + resp.generated;
@@ -401,7 +382,6 @@ def redirection_page():
 </html>
 ''')
 
-# /create_redirection endpoint (unchanged)
 @app.route('/create_redirection', methods=['POST'])
 def create_redirection():
     data = request.get_json()
@@ -413,7 +393,6 @@ def create_redirection():
     col_redirections.insert_one(doc)
     return jsonify(success=True, generated="/s/" + code)
 
-# /s/<code> endpoint (unchanged – no verification required)
 @app.route('/s/<code>')
 def redirection_redirect(code):
     record = col_redirections.find_one({"code": code})
@@ -421,11 +400,11 @@ def redirection_redirect(code):
         abort(404, description="Redirection link not found.")
     tg_user = request.cookies.get("tg_user")
     try:
-        uid = int(tg_user) if tg_user is not None else "guest"
+        tg_user_val = int(tg_user) if tg_user is not None else "guest"
     except:
-        uid = "guest"
+        tg_user_val = "guest"
     usage_record = {
-        "user_id": str(uid),
+        "user_id": str(tg_user_val),
         "code": code,
         "timestamp": datetime.now(timezone.utc),
         "type": "s"
@@ -433,7 +412,7 @@ def redirection_redirect(code):
     col_usage.insert_one(usage_record)
     return redirect(record["link"])
 
-# /verify and /check_verification endpoints (unchanged)
+# --- Verification Endpoints ---
 @app.route('/verify')
 def verify():
     next_url = request.args.get('next') or url_for('teralink_page')
@@ -463,7 +442,7 @@ def verify():
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body { background: linear-gradient(135deg, #2C3E50, #34495E); font-family: "Georgia", serif; color: #ECF0F1; margin: 0; padding: 0;
-           display: flex; align-items: center; justify-content: center; height: 100vh; }
+          display: flex; align-items: center; justify-content: center; height: 100vh; }
     .verify-container { background: #34495E; padding: 30px; border-radius: 10px;
                         box-shadow: 0 4px 15px rgba(0,0,0,0.3); text-align: center; width: 90%; max-width: 500px; }
     .verify-container h3 { font-size: 28px; margin-bottom: 20px; }
@@ -511,7 +490,7 @@ def check_verification():
         "original_url": data["original_url"]
     })
 
-# /p/<code> endpoint – Embed page with title and description display
+# --- Embed Page Endpoint (Modified) ---
 @app.route('/p/<code>')
 def embed_page(code):
     tg_user = request.cookies.get("tg_user")
@@ -528,9 +507,8 @@ def embed_page(code):
     if not record:
         abort(404, description="Link not found.")
     original_link = record["link"]
-    video_title = record.get("title", "Untitled")
-    video_description = record.get("description", "")
-    today_str = str(date.today())
+    video_title = record.get("title", "")
+    description = record.get("description", "")
     global daily_limit_enabled
     sub = subscriptions.get(str(uid))
     expiry_dt = None
@@ -613,11 +591,10 @@ def embed_page(code):
     else:
         embed_url = original_link
     ua = request.headers.get('User-Agent', '').lower()
-    # Update the embed template to include title and a toggle for description.
     template = MOBILE_EMBED_TEMPLATE if any(k in ua for k in ['iphone','android','ipad','mobile']) else DESKTOP_EMBED_TEMPLATE
-    return render_template_string(template, embed_url=embed_url, video_title=video_title, video_description=video_description)
+    return render_template_string(template, embed_url=embed_url, video_title=video_title, description=description)
 
-# --- Embed Templates (Desktop and Mobile) with Title and Toggle-able Description ---
+# --- Embed Templates (Modified to include caption & toggleable description) ---
 DESKTOP_EMBED_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -626,78 +603,75 @@ DESKTOP_EMBED_TEMPLATE = '''
   <title>{{ video_title }}</title>
   <style>
     html, body { margin: 0; padding: 0; height: 100%; }
-    iframe { width: 100%; height: 70%; border: none; }
-    #video-info { padding: 15px; background: #f0f0f0; color: #333; }
-    #description { display: none; margin-top: 10px; }
-    .toggle-btn { cursor: pointer; font-size: 16px; color: blue; text-decoration: underline; }
+    .embed-container { position: relative; height: 100%; }
+    iframe { width: 100%; height: 100%; border: none; }
+    .caption {
+       position: absolute;
+       bottom: 0;
+       left: 0;
+       width: 100%;
+       background: rgba(0, 0, 0, 0.6);
+       color: #fff;
+       padding: 10px;
+       box-sizing: border-box;
+       cursor: pointer;
+       display: flex;
+       justify-content: space-between;
+       align-items: center;
+    }
+    .description {
+       display: none;
+       background: rgba(0, 0, 0, 0.8);
+       color: #fff;
+       padding: 10px;
+       box-sizing: border-box;
+       max-height: 50%;
+       overflow: auto;
+    }
+    .arrow { font-size: 16px; margin-left: 10px; }
   </style>
 </head>
 <body>
-  <iframe src="{{ embed_url }}" allowfullscreen sandbox="allow-same-origin allow-scripts"></iframe>
-  <div id="video-info">
-    <h3 onclick="toggleDescription()">{{ video_title }}</h3>
-    {% if video_description %}
-      <div id="description">
-        <p>{{ video_description }}</p>
-      </div>
-      <div class="toggle-btn" onclick="toggleDescription()">Show/Hide Description</div>
+  <div class="embed-container">
+    <iframe src="{{ embed_url }}" allowfullscreen sandbox="allow-same-origin allow-scripts"></iframe>
+    {% if video_title %}
+    <div class="caption" id="caption">
+      <span>{{ video_title }}</span>
+      {% if description %}
+      <span class="arrow" id="toggleArrow">&#9660;</span>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if description %}
+    <div class="description" id="description">{{ description }}</div>
     {% endif %}
   </div>
   <script>
-    function toggleDescription() {
-      var desc = document.getElementById("description");
-      if(desc.style.display === "none") {
-        desc.style.display = "block";
-      } else {
-        desc.style.display = "none";
+    document.addEventListener("DOMContentLoaded", function() {
+      var caption = document.getElementById("caption");
+      var description = document.getElementById("description");
+      var toggleArrow = document.getElementById("toggleArrow");
+      if (caption && description) {
+        caption.addEventListener("click", function() {
+          if (description.style.display === "none" || description.style.display === "") {
+            description.style.display = "block";
+            toggleArrow.innerHTML = "&#9650;";
+          } else {
+            description.style.display = "none";
+            toggleArrow.innerHTML = "&#9660;";
+          }
+        });
       }
-    }
+    });
   </script>
 </body>
 </html>
 '''
 
-MOBILE_EMBED_TEMPLATE = '''
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{ video_title }}</title>
-  <style>
-    html, body { margin: 0; padding: 0; height: 100%; }
-    iframe { width: 100%; height: 70%; border: none; }
-    #video-info { padding: 10px; background: #f0f0f0; color: #333; }
-    #description { display: none; margin-top: 10px; }
-    .toggle-btn { cursor: pointer; font-size: 14px; color: blue; text-decoration: underline; }
-  </style>
-</head>
-<body>
-  <iframe src="{{ embed_url }}" allowfullscreen sandbox="allow-same-origin allow-scripts"></iframe>
-  <div id="video-info">
-    <h3 onclick="toggleDescription()">{{ video_title }}</h3>
-    {% if video_description %}
-      <div id="description">
-        <p>{{ video_description }}</p>
-      </div>
-      <div class="toggle-btn" onclick="toggleDescription()">Show/Hide Description</div>
-    {% endif %}
-  </div>
-  <script>
-    function toggleDescription() {
-      var desc = document.getElementById("description");
-      if(desc.style.display === "none") {
-        desc.style.display = "block";
-      } else {
-        desc.style.display = "none";
-      }
-    }
-  </script>
-</body>
-</html>
-'''
+# For mobile, we use the same template
+MOBILE_EMBED_TEMPLATE = DESKTOP_EMBED_TEMPLATE
 
-# --- /info Endpoint ---
+# --- /info Endpoint (Unchanged) ---
 @app.route("/info")
 def info():
     tg_user = request.cookies.get("tg_user")
@@ -788,7 +762,6 @@ def info():
     ''', tg_user=tg_user, plan_info=plan_info)
 
 # --- Telegram Bot Command Handlers ---
-
 def split_message(text, max_length=4000):
     lines = text.splitlines(keepends=True)
     chunks = []
