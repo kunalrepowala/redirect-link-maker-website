@@ -16,7 +16,7 @@ nest_asyncio.apply()
 # -----------------------
 # Additional Imports for Title Extraction and MongoDB
 # -----------------------
-import requests  # Used both by the bot and for title extraction
+import requests  # used for both title extraction and Telegram bot
 from bs4 import BeautifulSoup  # Install via: pip install beautifulsoup4
 from pymongo import MongoClient
 
@@ -33,42 +33,33 @@ logging.basicConfig(
 )
 
 # -----------------------
-# Global Data & File Names for local storage (JSON/CSV)
+# MongoDB Connections (for all website data)
 # -----------------------
-MAPPING_JSON_FILE = 'mapping.json'
-MAPPING_CSV_FILE = 'mapping.csv'
-REDIRECTION_JSON_FILE = 'redirection.json'
-REDIRECTION_CSV_FILE = 'redirection.csv'
+# Use the usage DB for all website data storage.
+usage_client = MongoClient("mongodb+srv://kunalrepowala7:ntDj85lF5JPJvz0a@cluster0.fgq1r.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
+db_usage = usage_client["Cluster0"]
+col_links = db_usage["links"]           # For TeraLink records
+col_redirections = db_usage["redirections"]  # For redirection records
+col_usage = db_usage["usage"]             # For website usage records
 
 # -----------------------
-# MongoDB Connections
+# Subscription Database (read-only)
 # -----------------------
-# Subscription DB (read-only) – DO NOT WRITE to this DB.
 users_client = MongoClient("mongodb+srv://kunalrepowala2:LCLIBQxW8IOdZpeF@cluster0.awvns.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
 db_users = users_client["Cluster0"]
 col_users = db_users["users"]
 
-# Usage DB (for website usage) – This DB stores usage records.
-usage_client = MongoClient("mongodb+srv://kunalrepowala7:ntDj85lF5JPJvz0a@cluster0.fgq1r.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
-db_usage = usage_client["Cluster0"]
-col_usage = db_usage["usage"]
-
 # -----------------------
-# In‑Memory Mappings (for link creation and verification)
+# In‑Memory Data for Verification (not persisted)
 # -----------------------
-# For TeraLink, we store a dictionary with keys "link" and "title"
-link_mapping = {}  # e.g. { "code": {"link": original_link, "title": extracted_title} }
-redirection_mapping = {}  # Redirection: code -> original full link
-
-pending_verifications = {}  # token -> { session_id, original_url, verified, telegram_user_id }
-verified_users = {}  # telegram_user_id -> session_id
-
-user_last_access = {}  # telegram_user_id -> (code, date_str)
+pending_verifications = {}   # token -> { session_id, original_url, verified, telegram_user_id }
+verified_users = {}          # telegram_user_id -> session_id
+user_last_access = {}        # telegram_user_id -> (code, date_str)
 
 # -----------------------
 # Bot Constants and Global Setting
 # -----------------------
-BOT_TOKEN = "7660007316:AAHis4NuPllVzH-7zsYhXGfgokiBxm_Tml0"
+BOT_TOKEN = "8031663240:AAFBLk9xBIrceFT4zTtKHSWeJ8iYq5cOdyA"
 daily_limit_enabled = True  # True = enforce per‑day limit; False = disable limit
 
 # -----------------------
@@ -76,31 +67,6 @@ daily_limit_enabled = True  # True = enforce per‑day limit; False = disable li
 # -----------------------
 def generate_code(length=10):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
-
-def load_json(filename):
-    if os.path.exists(filename):
-        with open(filename, 'r') as f:
-            try:
-                return json.load(f)
-            except Exception:
-                return {}
-    return {}
-
-def save_json(data, filename):
-    with open(filename, 'w') as f:
-        json.dump(data, f)
-
-def append_csv(filename, row, header=None):
-    file_exists = os.path.exists(filename)
-    with open(filename, 'a', newline='', encoding='utf-8') as csvfile:
-        writer = csv.writer(csvfile)
-        if not file_exists and header:
-            writer.writerow(header)
-        writer.writerow(row)
-
-# Load persistent mappings from JSON files
-link_mapping = load_json(MAPPING_JSON_FILE)
-redirection_mapping = load_json(REDIRECTION_JSON_FILE)
 
 def get_bot_username():
     try:
@@ -250,49 +216,49 @@ def teralink_page():
   </div>
   <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
   <script>
-  $(document).ready(function(){
-      $('#generateBtn').click(function(){
-          var link = $('#linkInput').val().trim();
-          $('#errorMsg').text('');
-          if(link.indexOf("/sharing/embed") === -1){
-              $('#errorMsg').text("Invalid link. Please provide a valid /sharing/embed link.");
-              return;
-          }
-          $.ajax({
-              url: '/generate',
-              method: 'POST',
-              contentType: 'application/json',
-              data: JSON.stringify({link: link}),
-              success: function(resp){
-                  if(resp.success){
-                      var genLink = window.location.origin + resp.generated;
-                      $('#genLinkText').val(genLink);
-                      $('#generatedLink').show();
-                  }
-              },
-              error: function(xhr){
-                  $('#errorMsg').text("Error: " + xhr.responseText);
-              }
-          });
-      });
-      $('#copyBtn').click(function(){
-          var text = $('#genLinkText').val();
-          navigator.clipboard ? navigator.clipboard.writeText(text) : (function(){
-              var $temp = $("<input>");
-              $("body").append($temp);
-              $temp.val(text).select();
-              document.execCommand("copy");
-              $temp.remove();
-          })();
-      });
-  });
+    $(document).ready(function(){
+        $('#generateBtn').click(function(){
+            var link = $('#linkInput').val().trim();
+            $('#errorMsg').text('');
+            if(link.indexOf("/sharing/embed") === -1){
+                $('#errorMsg').text("Invalid link. Please provide a valid /sharing/embed link.");
+                return;
+            }
+            $.ajax({
+                url: '/generate',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({link: link}),
+                success: function(resp){
+                    if(resp.success){
+                        var genLink = window.location.origin + resp.generated;
+                        $('#genLinkText').val(genLink);
+                        $('#generatedLink').show();
+                    }
+                },
+                error: function(xhr){
+                    $('#errorMsg').text("Error: " + xhr.responseText);
+                }
+            });
+        });
+        $('#copyBtn').click(function(){
+            var text = $('#genLinkText').val();
+            navigator.clipboard ? navigator.clipboard.writeText(text) : (function(){
+                var $temp = $("<input>");
+                $("body").append($temp);
+                $temp.val(text).select();
+                document.execCommand("copy");
+                $temp.remove();
+            })();
+        });
+    });
   </script>
 </body>
 </html>
 ''')
 
 # -----------------------
-# /generate Endpoint – Process TeraLink creation (extract title once)
+# /generate Endpoint – Process TeraLink creation (extract title once and store in Mongo)
 # -----------------------
 @app.route('/generate', methods=['POST'])
 def generate_teralink():
@@ -301,11 +267,9 @@ def generate_teralink():
     if "/sharing/embed" not in link:
         return jsonify(success=False, error="Invalid link. Only /sharing/embed links are accepted."), 400
     code = generate_code(10)
-    # Extract title once at creation time
     title = extract_title(link)
-    link_mapping[code] = {"link": link, "title": title}
-    save_json(link_mapping, MAPPING_JSON_FILE)
-    append_csv(MAPPING_CSV_FILE, [code, link, title], header=["code", "link", "title"])
+    doc = {"code": code, "link": link, "title": title, "created_at": datetime.utcnow()}
+    col_links.insert_one(doc)
     return jsonify(success=True, generated="/p/" + code)
 
 # -----------------------
@@ -355,49 +319,49 @@ def redirection_page():
   </div>
   <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
   <script>
-  $(document).ready(function(){
-      $('#generateRedirectionBtn').click(function(){
-          var link = $('#redirectionInput').val().trim();
-          $('#errorMsgRedirection').text('');
-          if(link === ""){
-              $('#errorMsgRedirection').text("Please enter a valid link.");
-              return;
-          }
-          $.ajax({
-              url: '/create_redirection',
-              method: 'POST',
-              contentType: 'application/json',
-              data: JSON.stringify({link: link}),
-              success: function(resp){
-                  if(resp.success){
-                      var genLink = window.location.origin + resp.generated;
-                      $('#redirectionLinkText').val(genLink);
-                      $('#generatedRedirection').show();
-                  }
-              },
-              error: function(xhr){
-                  $('#errorMsgRedirection').text("Error: " + xhr.responseText);
-              }
-          });
-      });
-      $('#copyRedirectionBtn').click(function(){
-          var text = $('#redirectionLinkText').val();
-          navigator.clipboard ? navigator.clipboard.writeText(text) : (function(){
-              var $temp = $("<input>");
-              $("body").append($temp);
-              $temp.val(text).select();
-              document.execCommand("copy");
-              $temp.remove();
-          })();
-      });
-  });
+    $(document).ready(function(){
+        $('#generateRedirectionBtn').click(function(){
+            var link = $('#redirectionInput').val().trim();
+            $('#errorMsgRedirection').text('');
+            if(link === ""){
+                $('#errorMsgRedirection').text("Please enter a valid link.");
+                return;
+            }
+            $.ajax({
+                url: '/create_redirection',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({link: link}),
+                success: function(resp){
+                    if(resp.success){
+                        var genLink = window.location.origin + resp.generated;
+                        $('#redirectionLinkText').val(genLink);
+                        $('#generatedRedirection').show();
+                    }
+                },
+                error: function(xhr){
+                    $('#errorMsgRedirection').text("Error: " + xhr.responseText);
+                }
+            });
+        });
+        $('#copyRedirectionBtn').click(function(){
+            var text = $('#redirectionLinkText').val();
+            navigator.clipboard ? navigator.clipboard.writeText(text) : (function(){
+                var $temp = $("<input>");
+                $("body").append($temp);
+                $temp.val(text).select();
+                document.execCommand("copy");
+                $temp.remove();
+            })();
+        });
+    });
   </script>
 </body>
 </html>
 ''')
 
 # -----------------------
-# /create_redirection Endpoint – Process redirection creation
+# /create_redirection Endpoint – Process redirection creation (store in Mongo)
 # -----------------------
 @app.route('/create_redirection', methods=['POST'])
 def create_redirection():
@@ -406,9 +370,8 @@ def create_redirection():
     if not link:
         return jsonify(success=False, error="Empty link provided."), 400
     code = generate_code(10)
-    redirection_mapping[code] = link
-    save_json(redirection_mapping, REDIRECTION_JSON_FILE)
-    append_csv(REDIRECTION_CSV_FILE, [code, link], header=["code", "link"])
+    doc = {"code": code, "link": link, "created_at": datetime.utcnow()}
+    col_redirections.insert_one(doc)
     return jsonify(success=True, generated="/s/" + code)
 
 # -----------------------
@@ -426,6 +389,9 @@ def redirection_redirect(code):
         return redirect(url_for('verify', next=request.url))
     if verified_users.get(tg_user_val) != session_id:
         return redirect(url_for('verify', next=request.url))
+    record = col_redirections.find_one({"code": code})
+    if not record:
+        abort(404, description="Redirection link not found.")
     # Record usage for redirection access
     usage_record = {
         "user_id": str(tg_user_val),
@@ -434,10 +400,7 @@ def redirection_redirect(code):
         "type": "s"
     }
     col_usage.insert_one(usage_record)
-    link = redirection_mapping.get(code)
-    if not link:
-        abort(404, description="Redirection link not found.")
-    return redirect(link)
+    return redirect(record["link"])
 
 # -----------------------
 # /verify and /check_verification Endpoints – For protected pages
@@ -553,7 +516,7 @@ def embed_page(code):
         return redirect(url_for('verify', next=request.url))
     if verified_users.get(tg_user_val) != session_cookie:
         return redirect(url_for('verify', next=request.url))
-    record = link_mapping.get(code)
+    record = col_links.find_one({"code": code})
     if not record:
         abort(404, description="Link not found.")
     original_link = record["link"]
@@ -713,27 +676,24 @@ def info():
         return redirect(url_for('verify', next=request.url))
     if verified_users.get(tg_user_val) != session_id:
         return redirect(url_for('verify', next=request.url))
-    # Query the subscription info from the first MongoDB (read-only)
+    # Read subscription details from the subscription DB (read-only)
     subscription = col_users.find_one({"user_id": str(tg_user_val)})
     if not subscription:
         plan_info = "<p>You are on a Basic Free Plan: 1 link per day.</p>"
     else:
-        # Assume subscription fields: purchased, expiry, plan, upgraded
         purchased = subscription.get("purchased")
         expiry = subscription.get("expiry")
-        plan = subscription.get("plan", "limited")  # default to limited if not present
+        plan = subscription.get("plan", "limited")
         upgraded = subscription.get("upgraded", False)
-        # Format purchase and expiry dates (if they are datetime objects; otherwise, use str)
         purchased_str = purchased.strftime("%Y-%m-%d %H:%M:%S") if hasattr(purchased, "strftime") else str(purchased)
         expiry_str = expiry.strftime("%Y-%m-%d %H:%M:%S") if hasattr(expiry, "strftime") else str(expiry)
-        # Calculate hours left until expiry (if expiry is datetime)
         if hasattr(expiry, "timestamp"):
             hours_left = (expiry - datetime.utcnow()).total_seconds() / 3600
             hours_left_str = f"{hours_left:.1f} hours left"
         else:
             hours_left_str = "N/A"
         if plan == "limited":
-            # Count usage for today from usage DB (for type "p")
+            # Count usage for today from usage DB for type "p"
             start_of_day = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
             end_of_day = start_of_day.replace(hour=23, minute=59, second=59, microsecond=999999)
             usage_count = col_usage.count_documents({"user_id": str(tg_user_val), "type": "p", "timestamp": {"$gte": start_of_day, "$lte": end_of_day}})
@@ -741,7 +701,7 @@ def info():
                          f"<p><strong>Purchased:</strong> {purchased_str}</p>"
                          f"<p><strong>Expiry:</strong> {expiry_str}</p>"
                          f"<p><strong>Time Left:</strong> {hours_left_str}</p>"
-                         f"<p><strong>Usage:</strong> {usage_count} / 3</p>")
+                         f"<p><strong>Usage Today:</strong> {usage_count} / 3</p>")
         elif plan == "full":
             plan_info = (f"<p><strong>Plan:</strong> Full (Ultimate Access)</p>"
                          f"<p><strong>Purchased:</strong> {purchased_str}</p>"
@@ -815,10 +775,12 @@ async def admin_teralink_handler(update: Update, context: ContextTypes.DEFAULT_T
     if update.effective_user.id != admin_id:
         await update.message.reply_text("Unauthorized.")
         return
-    if not link_mapping:
-        await update.message.reply_text("No TeraLink links created yet.")
-        return
-    lines = [f"/p/{code}  =>  {record['title']}" for code, record in link_mapping.items()]
+    cursor = col_links.find({})
+    lines = []
+    for doc in cursor:
+        code = doc.get("code")
+        title = doc.get("title", "No Title")
+        lines.append(f"/p/{code}  =>  {title}")
     message = "\n".join(lines)
     for chunk in split_message(message):
         await update.message.reply_text(chunk)
@@ -828,10 +790,12 @@ async def admin_redirection_handler(update: Update, context: ContextTypes.DEFAUL
     if update.effective_user.id != admin_id:
         await update.message.reply_text("Unauthorized.")
         return
-    if not redirection_mapping:
-        await update.message.reply_text("No redirection links created yet.")
-        return
-    lines = [f"/s/{code}  =>  {link}" for code, link in redirection_mapping.items()]
+    cursor = col_redirections.find({})
+    lines = []
+    for doc in cursor:
+        code = doc.get("code")
+        link = doc.get("link", "No Link")
+        lines.append(f"/s/{code}  =>  {link}")
     message = "\n".join(lines)
     for chunk in split_message(message):
         await update.message.reply_text(chunk)
