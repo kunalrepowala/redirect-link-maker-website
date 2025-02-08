@@ -705,23 +705,36 @@ def info():
         return redirect(url_for('verify', next=request.url))
     # Look up subscription details from the global subscriptions dictionary
     sub = subscriptions.get(str(tg_user_val))
-    if sub and sub.get("expiry") and datetime.utcnow() > sub.get("expiry"):
+    # If the subscription exists and its expiry is stored as a string, convert it
+    if sub and sub.get("expiry"):
+        try:
+            expiry_dt = datetime.fromisoformat(sub.get("expiry"))
+        except Exception:
+            expiry_dt = None
+    else:
+        expiry_dt = None
+
+    # If subscription exists but has expired, treat as not having a subscription.
+    if sub and expiry_dt and datetime.utcnow() > expiry_dt:
         sub = None
+
     if not sub:
         plan_info = "<p>You are on the Basic Free Plan (1 link per day).</p>"
     else:
-        purchased = sub.get("purchased")
-        expiry = sub.get("expiry")
-        plan = sub.get("plan", "limited")
-        upgraded = sub.get("upgraded", False)
-        purchased_str = purchased.strftime("%Y-%m-%d %H:%M:%S") if hasattr(purchased, "strftime") else str(purchased)
-        expiry_str = expiry.strftime("%Y-%m-%d %H:%M:%S") if hasattr(expiry, "strftime") else str(expiry)
-        if hasattr(expiry, "timestamp"):
-            hours_left = (expiry - datetime.utcnow()).total_seconds() / 3600
+        purchased_value = sub.get("purchased")
+        try:
+            purchased_dt = datetime.fromisoformat(purchased_value) if purchased_value else None
+        except Exception:
+            purchased_dt = None
+        purchased_str = purchased_dt.strftime("%Y-%m-%d %H:%M:%S") if purchased_dt else str(purchased_value)
+        expiry_str = expiry_dt.strftime("%Y-%m-%d %H:%M:%S") if expiry_dt else str(sub.get("expiry"))
+        if expiry_dt:
+            hours_left = (expiry_dt - datetime.utcnow()).total_seconds() / 3600
             hours_left_str = f"{hours_left:.1f} hours left"
         else:
             hours_left_str = "N/A"
-        if plan == "limited":
+        if sub.get("plan", "limited") == "limited":
+            # Count usage for today from usage DB for type "p"
             start_of_day = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
             end_of_day = start_of_day.replace(hour=23, minute=59, second=59, microsecond=999999)
             usage_count = col_usage.count_documents({
@@ -734,12 +747,12 @@ def info():
                          f"<p><strong>Expiry:</strong> {expiry_str}</p>"
                          f"<p><strong>Time Left:</strong> {hours_left_str}</p>"
                          f"<p><strong>Usage Today:</strong> {usage_count} / 3</p>")
-        elif plan == "full":
+        elif sub.get("plan") == "full":
             plan_info = (f"<p><strong>Plan:</strong> Full (Ultimate Access)</p>"
                          f"<p><strong>Purchased:</strong> {purchased_str}</p>"
                          f"<p><strong>Expiry:</strong> {expiry_str}</p>"
                          f"<p><strong>Time Left:</strong> {hours_left_str}</p>")
-            if upgraded:
+            if sub.get("upgraded"):
                 plan_info = plan_info.replace("Ultimate Access", "Upgraded to Ultimate")
         else:
             plan_info = "<p>Plan details unavailable.</p>"
