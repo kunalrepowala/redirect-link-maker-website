@@ -7,7 +7,7 @@ from flask import (
     redirect,
     url_for
 )
-import random, string, os, asyncio, threading, time
+import random, string, asyncio, threading, time
 from datetime import date, datetime
 import nest_asyncio
 nest_asyncio.apply()
@@ -34,7 +34,7 @@ logging.basicConfig(
 # -----------------------
 # MongoDB Connections
 # -----------------------
-# Use the usage DB for all website data storage.
+# Use this MongoDB for all website data storage.
 usage_client = MongoClient("mongodb+srv://kunalrepowala7:ntDj85lF5JPJvz0a@cluster0.fgq1r.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
 db_usage = usage_client["Cluster0"]
 col_links = db_usage["links"]           # For TeraLink records
@@ -61,7 +61,6 @@ def update_subscriptions():
     global subscriptions
     while True:
         subs = {}
-        # Read all subscription documents (do not write changes)
         for doc in col_users.find({}):
             uid = str(doc.get("user_id"))
             subs[uid] = doc
@@ -113,7 +112,7 @@ def extract_title(url):
 app = Flask(__name__)
 
 # -----------------------
-# Main Page ("/") – Landing page with additional "Contact Admin" button
+# Main Page ("/") – Landing page with "Contact Admin" button
 # -----------------------
 @app.route("/")
 def home():
@@ -400,7 +399,7 @@ def redirection_redirect(code):
         tg_user_val = int(tg_user)
     except ValueError:
         return redirect(url_for('verify', next=request.url))
-    if verified_users.get(tg_user_val) != session_cookie:
+    if verified_users.get(tg_user_val) != session_id:
         return redirect(url_for('verify', next=request.url))
     record = col_redirections.find_one({"code": code})
     if not record:
@@ -535,20 +534,17 @@ def embed_page(code):
     video_title = record["title"]
     today_str = str(date.today())
     global daily_limit_enabled
-    # Check subscription from global subscriptions dictionary
+    # Determine allowed usage based on subscription:
     sub = subscriptions.get(str(tg_user_val))
-    # If subscription exists and expired, treat as no subscription
     if sub and sub.get("expiry") and datetime.utcnow() > sub.get("expiry"):
         sub = None
-    # Determine allowed accesses:
     if sub:
         if sub.get("plan", "limited") == "full" or sub.get("upgraded", False):
             allowed = float("inf")
         else:
             allowed = 3
     else:
-        allowed = 1  # Basic free plan
-    # Count usage for type "p" for today
+        allowed = 1
     start_of_day = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     end_of_day = start_of_day.replace(hour=23, minute=59, second=59, microsecond=999999)
     usage_count = col_usage.count_documents({
@@ -639,7 +635,6 @@ def embed_page(code):
         embed_url = original_link + ("&hide_logo=1" if "?" in original_link else "?hide_logo=1")
     else:
         embed_url = original_link
-    # Record usage for TeraLink access
     usage_record = {
         "user_id": str(tg_user_val),
         "code": code,
@@ -648,8 +643,7 @@ def embed_page(code):
     }
     col_usage.insert_one(usage_record)
     ua = request.headers.get('User-Agent', '').lower()
-    template = (MOBILE_EMBED_TEMPLATE if any(k in ua for k in ['iphone','android','ipad','mobile'])
-                else DESKTOP_EMBED_TEMPLATE)
+    template = MOBILE_EMBED_TEMPLATE if any(k in ua for k in ['iphone','android','ipad','mobile']) else DESKTOP_EMBED_TEMPLATE
     return render_template_string(template, embed_url=embed_url, video_title=video_title)
 
 # -----------------------
@@ -691,7 +685,7 @@ MOBILE_EMBED_TEMPLATE = '''
 '''
 
 # -----------------------
-# /info Endpoint – Show only user info and subscription details
+# /info Endpoint – Show only user info and subscription details (only for verified users)
 # -----------------------
 @app.route("/info")
 def info():
@@ -705,13 +699,10 @@ def info():
         return redirect(url_for('verify', next=request.url))
     if verified_users.get(tg_user_val) != session_id:
         return redirect(url_for('verify', next=request.url))
-    # Use the global subscriptions dictionary (updated every 2 seconds)
+    # Look up subscription from the global subscriptions dictionary
     sub = subscriptions.get(str(tg_user_val))
-    if sub:
-        # Check expiry
-        expiry = sub.get("expiry")
-        if expiry and datetime.utcnow() > expiry:
-            sub = None
+    if sub and sub.get("expiry") and datetime.utcnow() > sub.get("expiry"):
+        sub = None
     if not sub:
         plan_info = "<p>You are on the Basic Free Plan (1 link per day).</p>"
     else:
@@ -727,10 +718,13 @@ def info():
         else:
             hours_left_str = "N/A"
         if plan == "limited":
-            # Count today's usage for type "p"
             start_of_day = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
             end_of_day = start_of_day.replace(hour=23, minute=59, second=59, microsecond=999999)
-            usage_count = col_usage.count_documents({"user_id": str(tg_user_val), "type": "p", "timestamp": {"$gte": start_of_day, "$lte": end_of_day}})
+            usage_count = col_usage.count_documents({
+                "user_id": str(tg_user_val),
+                "type": "p",
+                "timestamp": {"$gte": start_of_day, "$lte": end_of_day}
+            })
             plan_info = (f"<p><strong>Plan:</strong> Limited (3 accesses per day)</p>"
                          f"<p><strong>Purchased:</strong> {purchased_str}</p>"
                          f"<p><strong>Expiry:</strong> {expiry_str}</p>"
@@ -745,7 +739,6 @@ def info():
                 plan_info = plan_info.replace("Ultimate Access", "Upgraded to Ultimate")
         else:
             plan_info = "<p>Plan details unavailable.</p>"
-    # Only show user info (Telegram user ID and subscription plan details)
     return render_template_string('''
 <!DOCTYPE html>
 <html>
@@ -789,7 +782,7 @@ def info():
     ''', tg_user=tg_user, plan_info=plan_info)
 
 # -----------------------
-# Telegram Bot Admin Command Handlers and /setting Command
+# Telegram Bot Admin Command Handlers and /setting and /mongo Commands
 # -----------------------
 def split_message(text, max_length=4000):
     lines = text.splitlines(keepends=True)
@@ -874,12 +867,23 @@ async def toggle_limit_callback(update: Update, context: ContextTypes.DEFAULT_TY
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(button_text, callback_data="toggle_limit")]])
     await query.edit_message_text(text, reply_markup=keyboard)
 
+async def mongo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin_id = 6773787379
+    if update.effective_user.id != admin_id:
+        await update.message.reply_text("Unauthorized.")
+        return
+    import json
+    subs_text = json.dumps(subscriptions, default=str, indent=2)
+    for chunk in split_message(subs_text):
+        await update.message.reply_text(chunk)
+
 async def run_telegram_bot():
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start_handler))
     application.add_handler(CommandHandler("TeraLink", admin_teralink_handler))
     application.add_handler(CommandHandler("Redirection", admin_redirection_handler))
     application.add_handler(CommandHandler("setting", setting_handler))
+    application.add_handler(CommandHandler("mongo", mongo_handler))
     application.add_handler(CallbackQueryHandler(toggle_limit_callback, pattern="^toggle_limit$"))
     await application.run_polling()
 
