@@ -8,3 +8,4 @@ requests
 asyncio
 bs4
 requests
+gevent
