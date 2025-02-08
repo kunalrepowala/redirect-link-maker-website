@@ -41,7 +41,7 @@ col_links = db_usage["links"]             # For TeraLink records
 col_redirections = db_usage["redirections"]   # For redirection records
 col_usage = db_usage["usage"]               # For website usage records
 
-# Subscription DB (read-only)
+# Subscription DB (read‑only)
 users_client = MongoClient("mongodb+srv://kunalrepowala2:LCLIBQxW8IOdZpeF@cluster0.awvns.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
 db_users = users_client["Cluster0"]
 col_users = db_users["users"]
@@ -54,12 +54,18 @@ verified_users = {}          # telegram_user_id -> session_id
 user_last_access = {}        # telegram_user_id -> (code, date_str)
 
 # Global subscriptions dictionary (updated every 2 seconds)
-# Expected format from the subscription DB document:
+# Expected subscription document format (from col_users):
 # {
 #   "_id": "users",
-#   "all_users": [ ... ],
+#   "all_users": [...],
 #   "subscriptions": {
-#       "6773787379": { "purchased": datetime, "expiry": datetime, "expired_notified": bool, "plan": "full"/"limited", "upgraded": bool },
+#       "6773787379": {
+#            "purchased": "2025-02-08T13:15:55.467774",
+#            "expiry": "2025-03-10T13:15:55.467774",
+#            "expired_notified": false,
+#            "plan": "full" or "limited",
+#            "upgraded": false
+#       },
 #       ...
 #   }
 # }
@@ -402,7 +408,7 @@ def redirection_redirect(code):
     record = col_redirections.find_one({"code": code})
     if not record:
         abort(404, description="Redirection link not found.")
-    # For usage, if user cookie exists, record it; otherwise, record as "guest"
+    # Record usage as guest if user is not verified.
     tg_user = request.cookies.get("tg_user")
     try:
         tg_user_val = int(tg_user) if tg_user is not None else "guest"
@@ -418,7 +424,7 @@ def redirection_redirect(code):
     return redirect(record["link"])
 
 # -----------------------
-# /verify and /check_verification Endpoints – For protected pages
+# /verify and /check_verification Endpoints – For protected pages (TeraLink and info)
 # -----------------------
 @app.route('/verify')
 def verify():
@@ -517,7 +523,7 @@ def check_verification():
     })
 
 # -----------------------
-# /p/<code> Endpoint – TeraLink embed page (no loading overlay, with saved title)
+# /p/<code> Endpoint – TeraLink embed page (requires verification)
 # -----------------------
 @app.route('/p/<code>')
 def embed_page(code):
@@ -538,9 +544,15 @@ def embed_page(code):
     video_title = record["title"]
     today_str = str(date.today())
     global daily_limit_enabled
-    # Determine allowed usage based on subscription from global subscriptions dict
+    # Process subscription info
     sub = subscriptions.get(str(tg_user_val))
-    if sub and sub.get("expiry") and datetime.utcnow() > sub.get("expiry"):
+    expiry_dt = None
+    if sub and sub.get("expiry"):
+        try:
+            expiry_dt = datetime.fromisoformat(sub.get("expiry")) if isinstance(sub.get("expiry"), str) else sub.get("expiry")
+        except Exception:
+            expiry_dt = None
+    if sub and expiry_dt and datetime.utcnow() > expiry_dt:
         sub = None
     if sub:
         if sub.get("plan", "limited") == "full" or sub.get("upgraded", False):
@@ -703,38 +715,38 @@ def info():
         return redirect(url_for('verify', next=request.url))
     if verified_users.get(tg_user_val) != session_id:
         return redirect(url_for('verify', next=request.url))
-    # Look up subscription details from the global subscriptions dictionary
+    # Look up subscription details from the global subscriptions dictionary.
+    # The subscription document is stored under the "subscriptions" key of the document with _id "users"
     sub = subscriptions.get(str(tg_user_val))
-    # If the subscription exists and its expiry is stored as a string, convert it
+    expiry_dt = None
     if sub and sub.get("expiry"):
         try:
-            expiry_dt = datetime.fromisoformat(sub.get("expiry"))
+            expiry_dt = datetime.fromisoformat(sub.get("expiry")) if isinstance(sub.get("expiry"), str) else sub.get("expiry")
         except Exception:
             expiry_dt = None
-    else:
-        expiry_dt = None
-
-    # If subscription exists but has expired, treat as not having a subscription.
     if sub and expiry_dt and datetime.utcnow() > expiry_dt:
         sub = None
-
     if not sub:
         plan_info = "<p>You are on the Basic Free Plan (1 link per day).</p>"
     else:
-        purchased_value = sub.get("purchased")
+        purchased_val = sub.get("purchased")
         try:
-            purchased_dt = datetime.fromisoformat(purchased_value) if purchased_value else None
+            purchased_dt = datetime.fromisoformat(purchased_val) if isinstance(purchased_val, str) else purchased_val
         except Exception:
             purchased_dt = None
-        purchased_str = purchased_dt.strftime("%Y-%m-%d %H:%M:%S") if purchased_dt else str(purchased_value)
+        purchased_str = purchased_dt.strftime("%Y-%m-%d %H:%M:%S") if purchased_dt else str(purchased_val)
         expiry_str = expiry_dt.strftime("%Y-%m-%d %H:%M:%S") if expiry_dt else str(sub.get("expiry"))
         if expiry_dt:
-            hours_left = (expiry_dt - datetime.utcnow()).total_seconds() / 3600
-            hours_left_str = f"{hours_left:.1f} hours left"
+            delta = expiry_dt - datetime.utcnow()
+            if delta.total_seconds() < 0:
+                time_left_str = "Expired"
+            else:
+                days = delta.days
+                hours = delta.seconds // 3600
+                time_left_str = f"{days} days, {hours} hours left"
         else:
-            hours_left_str = "N/A"
+            time_left_str = "N/A"
         if sub.get("plan", "limited") == "limited":
-            # Count usage for today from usage DB for type "p"
             start_of_day = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
             end_of_day = start_of_day.replace(hour=23, minute=59, second=59, microsecond=999999)
             usage_count = col_usage.count_documents({
@@ -745,13 +757,13 @@ def info():
             plan_info = (f"<p><strong>Plan:</strong> Limited (3 accesses per day)</p>"
                          f"<p><strong>Purchased:</strong> {purchased_str}</p>"
                          f"<p><strong>Expiry:</strong> {expiry_str}</p>"
-                         f"<p><strong>Time Left:</strong> {hours_left_str}</p>"
+                         f"<p><strong>Time Left:</strong> {time_left_str}</p>"
                          f"<p><strong>Usage Today:</strong> {usage_count} / 3</p>")
         elif sub.get("plan") == "full":
             plan_info = (f"<p><strong>Plan:</strong> Full (Ultimate Access)</p>"
                          f"<p><strong>Purchased:</strong> {purchased_str}</p>"
                          f"<p><strong>Expiry:</strong> {expiry_str}</p>"
-                         f"<p><strong>Time Left:</strong> {hours_left_str}</p>")
+                         f"<p><strong>Time Left:</strong> {time_left_str}</p>")
             if sub.get("upgraded"):
                 plan_info = plan_info.replace("Ultimate Access", "Upgraded to Ultimate")
         else:
