@@ -37,11 +37,11 @@ logging.basicConfig(
 # Use this MongoDB for all website data storage.
 usage_client = MongoClient("mongodb+srv://kunalrepowala7:ntDj85lF5JPJvz0a@cluster0.fgq1r.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
 db_usage = usage_client["Cluster0"]
-col_links = db_usage["links"]           # For TeraLink records
-col_redirections = db_usage["redirections"]  # For redirection records
-col_usage = db_usage["usage"]             # For website usage records
+col_links = db_usage["links"]             # For TeraLink records
+col_redirections = db_usage["redirections"]   # For redirection records
+col_usage = db_usage["usage"]               # For website usage records
 
-# Subscription DB (read‑only)
+# Subscription DB (read-only)
 users_client = MongoClient("mongodb+srv://kunalrepowala2:LCLIBQxW8IOdZpeF@cluster0.awvns.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
 db_users = users_client["Cluster0"]
 col_users = db_users["users"]
@@ -54,17 +54,25 @@ verified_users = {}          # telegram_user_id -> session_id
 user_last_access = {}        # telegram_user_id -> (code, date_str)
 
 # Global subscriptions dictionary (updated every 2 seconds)
-# Structure: { user_id (str): { "purchased": datetime, "expiry": datetime, "expired_notified": bool, "plan": "full"/"limited", "upgraded": bool } }
+# Expected format from the subscription DB document:
+# {
+#   "_id": "users",
+#   "all_users": [ ... ],
+#   "subscriptions": {
+#       "6773787379": { "purchased": datetime, "expiry": datetime, "expired_notified": bool, "plan": "full"/"limited", "upgraded": bool },
+#       ...
+#   }
+# }
 subscriptions = {}
 
 def update_subscriptions():
     global subscriptions
     while True:
-        subs = {}
-        for doc in col_users.find({}):
-            uid = str(doc.get("user_id"))
-            subs[uid] = doc
-        subscriptions = subs
+        doc = col_users.find_one({"_id": "users"})
+        if doc and "subscriptions" in doc:
+            subscriptions = doc["subscriptions"]
+        else:
+            subscriptions = {}
         time.sleep(2)
 
 sub_thread = threading.Thread(target=update_subscriptions, daemon=True)
@@ -387,23 +395,19 @@ def create_redirection():
     return jsonify(success=True, generated="/s/" + code)
 
 # -----------------------
-# /s/<code> Endpoint – Redirect to stored redirection (requires verification)
+# /s/<code> Endpoint – Redirect to stored redirection (NO verification required)
 # -----------------------
 @app.route('/s/<code>')
 def redirection_redirect(code):
-    tg_user = request.cookies.get("tg_user")
-    session_id = request.cookies.get("session_id")
-    if not tg_user or not session_id:
-        return redirect(url_for('verify', next=request.url))
-    try:
-        tg_user_val = int(tg_user)
-    except ValueError:
-        return redirect(url_for('verify', next=request.url))
-    if verified_users.get(tg_user_val) != session_id:
-        return redirect(url_for('verify', next=request.url))
     record = col_redirections.find_one({"code": code})
     if not record:
         abort(404, description="Redirection link not found.")
+    # For usage, if user cookie exists, record it; otherwise, record as "guest"
+    tg_user = request.cookies.get("tg_user")
+    try:
+        tg_user_val = int(tg_user) if tg_user is not None else "guest"
+    except:
+        tg_user_val = "guest"
     usage_record = {
         "user_id": str(tg_user_val),
         "code": code,
@@ -534,7 +538,7 @@ def embed_page(code):
     video_title = record["title"]
     today_str = str(date.today())
     global daily_limit_enabled
-    # Determine allowed usage based on subscription:
+    # Determine allowed usage based on subscription from global subscriptions dict
     sub = subscriptions.get(str(tg_user_val))
     if sub and sub.get("expiry") and datetime.utcnow() > sub.get("expiry"):
         sub = None
@@ -685,7 +689,7 @@ MOBILE_EMBED_TEMPLATE = '''
 '''
 
 # -----------------------
-# /info Endpoint – Show only user info and subscription details (only for verified users)
+# /info Endpoint – Show only user info and subscription details (for verified users)
 # -----------------------
 @app.route("/info")
 def info():
@@ -699,7 +703,7 @@ def info():
         return redirect(url_for('verify', next=request.url))
     if verified_users.get(tg_user_val) != session_id:
         return redirect(url_for('verify', next=request.url))
-    # Look up subscription from the global subscriptions dictionary
+    # Look up subscription details from the global subscriptions dictionary
     sub = subscriptions.get(str(tg_user_val))
     if sub and sub.get("expiry") and datetime.utcnow() > sub.get("expiry"):
         sub = None
