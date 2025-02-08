@@ -6,3 +6,5 @@ python-telegram-bot
 nest_asyncio
 requests
 asyncio
+bs4
+requests
