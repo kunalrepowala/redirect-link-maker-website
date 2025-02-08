@@ -1,3 +1,8 @@
 Flask
 gunicorn
 python-telegram-bot==20
+pymongo
+python-telegram-bot
+nest_asyncio
+requests
+asyncio
