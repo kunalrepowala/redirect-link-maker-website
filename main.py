@@ -464,4 +464,4 @@ def play_image(unique_id):
     return render_template_string(html, data=data)
 
 if __name__ == '__main__':
-    app.run(port=8080, debug=True)
+    app.run(host="0.0.0.0", debug=True, use_reloader=False, port=8080)
