@@ -41,7 +41,7 @@ def add_no_cache_headers(response):
     return response
 
 # ----------------------------
-# Video Creation Page (/TeraLink)
+# Video Creation Page (/Tera9Link0102696151)
 # ----------------------------
 @app.route('/TeraLink', methods=['GET', 'POST'])
 def teralink():
@@ -259,7 +259,7 @@ def play_video_secure(unique_id):
 # ----------------------------
 # Image Creation Page (/image)
 # ----------------------------
-@app.route('/image', methods=['GET', 'POST'])
+@app.route('/0iLLgGAwv1ag8e', methods=['GET', 'POST'])
 def image_creation():
     error = None
     generated_link = None
