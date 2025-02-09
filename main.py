@@ -43,7 +43,7 @@ def add_no_cache_headers(response):
 # ----------------------------
 # Video Creation Page (/Tera9Link0102696151)
 # ----------------------------
-@app.route('/TeraLink', methods=['GET', 'POST'])
+@app.route('/ThwgGh1888eraLi996nk', methods=['GET', 'POST'])
 def teralink():
     error = None
     generated_link = None
