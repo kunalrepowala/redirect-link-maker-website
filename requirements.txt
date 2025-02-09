@@ -9,3 +9,4 @@ asyncio
 bs4
 requests
 gevent
+pil
